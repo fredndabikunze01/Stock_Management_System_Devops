@@ -1,14 +1,10 @@
-name: Stock Management CI
+name: Stock Management CI and Jira Automation
 
 on:
   push:
     branches:
       - main
       - "feature/**"
-  pull_request:
-    branches:
-      - main
-    types: [opened, synchronize, reopened, closed]
 
 permissions:
   contents: read
@@ -17,9 +13,11 @@ jobs:
   backend:
     name: Backend tests
     runs-on: ubuntu-latest
+
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -27,6 +25,7 @@ jobs:
           java-version: "17"
           cache: maven
           cache-dependency-path: backend/pom.xml
+
       - name: Run Maven tests
         working-directory: backend
         run: mvn --batch-mode clean test
@@ -34,55 +33,64 @@ jobs:
   frontend:
     name: Frontend build
     runs-on: ubuntu-latest
+
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+
       - name: Install dependencies
         working-directory: frontend
         run: npm ci
+
       - name: Build frontend
         working-directory: frontend
         run: npm run build
 
   jira-transition:
-    name: Transition Jira issue after successful merge
+    name: Move Jira issue to Done after successful push
     needs: [backend, frontend]
     if: >-
       success() &&
-      github.event_name == 'pull_request' &&
-      github.event.action == 'closed' &&
-      github.event.pull_request.merged == true &&
+      github.event_name == 'push' &&
       vars.JIRA_TRANSITIONS_ENABLED == 'true'
+
     runs-on: ubuntu-latest
+
     steps:
-      - name: Find Jira issue key from merged pull request
+      - name: Find Jira issue key
         id: issue
         env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BRANCH_NAME: ${{ github.ref_name }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         shell: bash
         run: |
-          issue_key="$(printf '%s\n' "$PR_TITLE" "$HEAD_REF" "$PR_BODY" \
+          issue_key="$(printf '%s\n' "$BRANCH_NAME" "$COMMIT_MESSAGE" \
             | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -n 1 || true)"
+
           if [[ -z "$issue_key" ]]; then
-            echo "::error::No Jira issue key found in the PR title, branch, or description."
-            exit 1
+            echo "No Jira issue key found. Skipping Jira update."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Found Jira issue: $issue_key"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "key=$issue_key" >> "$GITHUB_OUTPUT"
           fi
-          echo "key=$issue_key" >> "$GITHUB_OUTPUT"
 
       - name: Move Jira issue to Done
+        if: steps.issue.outputs.found == 'true'
         env:
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
           JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           ISSUE_KEY: ${{ steps.issue.outputs.key }}
+
         shell: bash
         run: |
           set -euo pipefail
@@ -92,22 +100,33 @@ jobs:
             exit 1
           fi
 
-          base_url="${JIRA_BASE_URL%/}"
-          transitions="$(curl --fail-with-body --silent --show-error \
-            --user "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
-            "$base_url/rest/api/3/issue/$ISSUE_KEY/transitions")"
-          transition_id="$(jq -r \
-            '.transitions[] | select((.to.name | ascii_downcase) == "done") | .id' \
-            <<< "$transitions" | head -n 1)"
+          BASE_URL="${JIRA_BASE_URL%/}"
 
-          if [[ -z "$transition_id" ]]; then
-            echo "::error::No available transition to a status named Done for $ISSUE_KEY."
+          echo "Checking available Jira transitions for $ISSUE_KEY..."
+
+          TRANSITIONS="$(curl --fail-with-body --silent --show-error \
+            --user "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+            "$BASE_URL/rest/api/3/issue/$ISSUE_KEY/transitions")"
+
+          TRANSITION_ID="$(jq -r '
+            .transitions[]
+            | select((.to.name | ascii_downcase) == "done")
+            | .id
+          ' <<< "$TRANSITIONS" | head -n 1)"
+
+          if [[ -z "$TRANSITION_ID" ]]; then
+            echo "::error::No available transition to Done for $ISSUE_KEY."
+            echo "Check the Jira workflow and permissions."
             exit 1
           fi
+
+          echo "Moving $ISSUE_KEY to Done..."
 
           curl --fail-with-body --silent --show-error \
             --user "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
             --header "Content-Type: application/json" \
             --request POST \
-            --data "{\"transition\":{\"id\":\"$transition_id\"}}" \
-            "$base_url/rest/api/3/issue/$ISSUE_KEY/transitions"
+            --data "{\"transition\":{\"id\":\"$TRANSITION_ID\"}}" \
+            "$BASE_URL/rest/api/3/issue/$ISSUE_KEY/transitions"
+
+          echo "Successfully moved $ISSUE_KEY to Done."
