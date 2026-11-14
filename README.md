@@ -155,6 +155,8 @@ git switch -c feature/SMS-2-auth-ci
 git add .
 git commit -m "SMS-2: demonstrate auth and CI"
 git push -u origin feature/SMS-2-auth-ci
+
+Establish ReactJS/Spring Boot codebase. Develop login UI with Tailwind CSS.Implement secure authentication via JWT. Design RESTful APIs for user management and data persistence. Configure PostgreSQL database.
 ```
 
 Then:

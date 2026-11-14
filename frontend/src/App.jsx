@@ -72,7 +72,7 @@ export default function App() {
         <section className="welcome-panel">
           <div className="brand"><span className="brand-icon">S</span> Stockroom</div>
           <div className="welcome-copy">
-            <p className="eyebrow">RWANDA POLYTECHNIC · DEVOPS DEMO</p>
+            <p className="eyebrow">RWANDA POLYTECHNIC · DEVOPS DEMO Sample For Fred Ndabikunze</p>
             <h1>Know what you have.<br /><span>Plan what’s next.</span></h1>
             <p>A simple stock dashboard built to demonstrate a complete GitHub Actions and Jira workflow.</p>
           </div>
